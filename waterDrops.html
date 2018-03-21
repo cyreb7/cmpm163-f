@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>Water Drops</title>
+    <meta charset="utf-8">
+  </head>
+<body>
+<h1 class="name">By Bryce Newbury</h1>
+<div id="container"></div>
+
+<script src="js/three.js"></script>
+  
+
+<script id="vertexShader" type="x-shader/x-vertex">
+  uniform mat4 modelViewMatrix;
+  uniform mat4 projectionMatrix;
+
+  attribute vec3 position;
+  attribute vec2 uv;
+  
+  varying vec2 vUV;
+
+  void main() {
+    vUV = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+  }
+</script>
+
+<script id="fragmentShader" type="x-shader/x-fragment">
+  // Creating my own rules for game of life based on example code
+  precision mediump float;
+
+  uniform vec2 textureSize; //The width and height of our screen
+  // x = velocity x
+  // y = velocity y
+  // z = volume of water in grams
+  uniform sampler2D waterSimulation;
+  uniform float time; //In MS
+  uniform float deltaTime; //In MS
+  
+  varying vec2 vUV;
+  
+  // Calculates the new velocity for a given pixel
+  vec2 velocity(vec2 pt) {
+    vec4 lastSim = texture2D(waterSimulation, pt);
+    
+    // Density * volume
+    // density of water = 1 g/cm³
+    float mass = lastSim.z;
+    // Assuming down is -y
+    // In CM/MS^2
+    vec2 gravity = vec2(0.0, -0.000980665);
+    
+    vec2 acceleration = gravity/mass;
+    
+    // TO DO: dampen the velocity to [0, 1]
+    vec2 newVelocity = clamp(lastSim.xy + acceleration * deltaTime, 0.0, 1.0);
+    
+    return newVelocity;
+  }
+  
+  // Calculates the contribution to the current cell's volume
+  // by examining all adjacent cells.
+  // Parameters are the current point and the delta between points
+  float calcluateNewVolume(vec2 pt, vec2 ptDelta) {
+    // Adapted from A model for real-time on-surface flows by J.-F. El Hajjar et al 
+    
+    //Calculate the texture point for the current cell
+    vec2 ptC = pt;
+    //Use the point to calculate its velocity
+    vec2 v = velocity(ptC);
+    // Find the cell's volume contribution to the pt cell
+    float newVolume = (1.0 - abs(v.x)) * (1.0 - abs(v.y)) * texture2D(waterSimulation, pt).z;
+    // Repeat for every adjacent cell
+    
+    ptC = vec2(max(pt.x - ptDelta.x, 0.0), min(pt.y + ptDelta.y, 1.0));
+    v = velocity(ptC);
+    newVolume += max(0.0, v.x) *abs(min(0.0, v.y)) * texture2D(waterSimulation, ptC).z;
+    
+    ptC = vec2(pt.x, min(pt.y + ptDelta.y, 1.0));
+    v = velocity(ptC);
+    newVolume += (1.0 - abs(v.x)) *abs(min(0.0, v.y)) * texture2D(waterSimulation, ptC).z;
+    
+    ptC = vec2(min(pt.x + ptDelta.x, 1.0), min(pt.y + ptDelta.y, 1.0));
+    v = velocity(ptC);
+    newVolume += abs(min(0.0, v.x))*abs(min(0.0, v.y)) * texture2D(waterSimulation, ptC).z;
+    
+    ptC = vec2(max(pt.x - ptDelta.x, 0.0), pt.y);
+    v = velocity(ptC);
+    newVolume += max(0.0, v.x) * (1.0 - abs(v.y)) * texture2D(waterSimulation, ptC).z;
+    
+    ptC = vec2(min(pt.x + ptDelta.x, 1.0), pt.y);
+    v = velocity(ptC);
+    newVolume += abs(min(0.0, v.x)) * (1.0 - abs(v.y)) * texture2D(waterSimulation, ptC).z;
+    
+    ptC = vec2(max(pt.x - ptDelta.x, 0.0), max(pt.y - ptDelta.y, 0.0));
+    v = velocity(ptC);
+    newVolume += max(0.0, v.x) *max(0.0, v.y) * texture2D(waterSimulation, ptC).z;
+    
+    ptC = vec2(pt.x, max(pt.y - ptDelta.y, 0.0));
+    v = velocity(ptC);
+    newVolume += (1.0 - abs(v.x)) *max(0.0, v.y) * texture2D(waterSimulation, ptC).z;
+    
+    ptC = vec2(min(pt.x + ptDelta.x, 1.0), max(pt.y - ptDelta.y, 0.0));
+    v = velocity(ptC);
+    newVolume += abs(min(0.0, v.x)) *max(0.0, v.y) * texture2D(waterSimulation, ptC).z;
+    
+    return newVolume;
+  }
+  
+  void main() {
+    // The current cell on the texture
+    vec2 point = vUV;
+    // The amount you need to add or subtract from the current point
+    // to get to an adjacent point
+    vec2 pointDelta = vec2(1.0/textureSize);
+    
+    // Update the velocity and volume
+    gl_FragColor = vec4(velocity(point), calcluateNewVolume(point, pointDelta), 1.0);
+   }
+</script>
+
+<script>
+  var scene;
+  var camera;
+  var renderer;
+
+  var resX = 100;
+  var resY = 100;
+
+  var bufferScene;
+  var bufferMaterial;
+  var bufferObject;
+  var FBO_A, FBO_B;
+  var plane;
+  var fullScreenQuad;
+
+  scene_setup(); //initialize the Three.js scene
+
+  function scene_setup(){
+    //This is the basic scene setup
+    scene = new THREE.Scene();
+    var width = window.innerWidth;
+    var height = window.innerHeight;
+
+    //orthographic camera can be used for 2D
+    camera = new THREE.OrthographicCamera( width / -2, width / 2, height / 2, height / -2, 0.1, 1000 );
+    camera.position.z = 0.2;
+
+    renderer = new THREE.WebGLRenderer();
+    renderer.setSize( window.innerWidth, window.innerHeight );
+    document.body.appendChild( renderer.domElement );
+  }
+
+  FBO_setup();
+
+  function FBO_setup(){
+    //Create off-screen buffer scene
+    bufferScene = new THREE.Scene();
+    
+    //Create 2 buffer textures
+    //FBO_A = new THREE.WebGLRenderTarget( resX, resY );
+    //FBO_B = new THREE.WebGLRenderTarget( resX, resY ); 
+    FBO_A = new THREE.WebGLRenderTarget( resX, resY, { minFilter: THREE.LinearFilter, magFilter: THREE.NearestFilter});
+    FBO_B = new THREE.WebGLRenderTarget( resX, resY, { minFilter: THREE.LinearFilter, magFilter: THREE.NearestFilter} );
+
+    //Begin by passing an initial "seed" texture to shader, containing randomly placed cells
+    var dataTexture = createDataTexture();
+
+    bufferMaterial = new THREE.RawShaderMaterial( {
+      uniforms: {
+        time: { type: "f", value: performance.now() },
+        deltaTime: { type: "f", value: 0.0 },
+        waterSimulation: { type: "t", value: dataTexture },
+        textureSize : {type: "v2", value: new THREE.Vector2( resX, resY )}  //shader doesn't have access to these global variables, so pass in the resolution
+      },
+        vertexShader: document.getElementById( 'vertexShader' ).innerHTML,
+        fragmentShader: document.getElementById( 'fragmentShader' ).innerHTML
+    } );
+
+    //we can use a Three.js Plane Geometry along with the orthographic camera to create a "full screen quad"
+    plane = new THREE.PlaneBufferGeometry( window.innerWidth, window.innerHeight )
+
+    bufferObject = new THREE.Mesh( plane, bufferMaterial );
+    bufferScene.add(bufferObject);
+
+    //Draw textureB to screen 
+    fullScreenQuad = new THREE.Mesh( plane, new THREE.MeshBasicMaterial() );
+    scene.add(fullScreenQuad);
+  }
+
+  render();
+
+  function render() {
+    requestAnimationFrame( render );
+
+    //Draw to the active offscreen buffer (whatever is stored in FBO_B), that is the output of this rendering pass will be stored in the texture associated with FBO_B
+    renderer.render(bufferScene, camera, FBO_B);
+    
+    //grab that texture and map it to the full screen quad
+    fullScreenQuad.material.map = FBO_B.texture;
+
+    //Then draw the full sceen quad to the on screen buffer, ie, the display
+    renderer.render( scene, camera );
+
+    //Now prepare for the next cycle by swapping FBO_A and FBO_B, so that the previous frame's *output* becomes the next frame's *input*
+    var t = FBO_A;
+    FBO_A = FBO_B;
+    FBO_B = t;
+    
+    var time = performance.now();
+    
+    bufferMaterial.uniforms.deltaTime.value = time - bufferMaterial.uniforms.time.value;
+    bufferMaterial.uniforms.time.value = time;
+    
+    bufferMaterial.uniforms.waterSimulation.value = FBO_A.texture;
+  }
+
+  function createDataTexture() {
+    // create a buffer with color data
+    
+    var size = resX * resY;
+    var data = new Uint8Array( 4 * size );
+
+    for ( var i = 0; i < size; i++ ) {
+      var stride = i * 4;
+      
+      // Randomly choose channels
+      data[ stride ] = Math.random() * 255;
+      data[ stride + 1 ] = Math.random() * 255;
+      data[ stride + 2 ] = Math.random() * 255;
+      data[ stride + 3 ] = Math.random() * 255;
+    }
+
+
+    // used the buffer to create a DataTexture
+    var texture = new THREE.DataTexture( data, resX, resY, THREE.RGBAFormat );
+    
+    texture.needsUpdate = true; // just a weird thing that Three.js wants you to do after you set the data for the texture
+
+    return texture;
+  }
+</script>
+
+</body>
+</html>
+
