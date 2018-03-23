@@ -123,13 +123,13 @@
   // Velocity stored in the texture is scaled from 0.0-1.0
   // this upscales it to -1.0-1.0
   vec2 unscaleVelocity(vec2 v) {
-    return v;
+    // return v;
     return clamp((v - 0.5) * 2.0, -1.0, 1.0);
   }
   
   // Converts -1.0-1.0 to 0.0-1.0
   vec2 scaleVelocity(vec2 v) {
-    return v;
+    // return v;
     return clamp(v / 2.0 + 0.5, 0.0, 1.0);
   }
   
@@ -139,21 +139,26 @@
     vec4 lastSim = texture2D(waterSimulation, pt);
     
     // Density * volume
-    // density of water = 1 g/cm³
-    // Need to make it relative to cell size
+    // Should mass be relative to grid size?
     float mass = lastSim.z;
-    // Assuming down is -y
-    // In CM/S^2 980.665
-    vec2 gravity = vec2(0.0, -980.0);
     
+    // Assuming down is -y
+    vec2 gravity = vec2(0.0, -1);
+    
+    // a = F/m
     vec2 acceleration = gravity/mass;
     
-    vec2 newVelocity = unscaleVelocity(lastSim.xy) + acceleration * dampen(mass) * deltaTime;
-    
+    // lastVelocity + deltaTime * acceleration
+    // Need to dampen the acceleration relative to the amount of water in the cell
+    // vec2 newVelocity = unscaleVelocity(lastSim.xy) + acceleration * deltaTime * dampen(mass);
+    vec2 newVelocity = unscaleVelocity(lastSim.xy) + acceleration * deltaTime * dampen(mass);
+    if (dampen(mass) >= 0.1) {
+      newVelocity.y = 0.0;
+    }
     // The paper seems to say it should be sqrt(2.0) * ptDelta, but that doesn't work...
-    vec2 maxDisplacement = sqrt(2.0 * ptDelta);
+    // vec2 maxDisplacement = sqrt(2.0 * ptDelta);
     // // vec2 maxDisplacement = sqrt(2.0) * ptDelta;
-    newVelocity =clamp(newVelocity, -maxDisplacement, maxDisplacement);
+    // newVelocity =clamp(newVelocity, -maxDisplacement, maxDisplacement);
     
     return scaleVelocity(newVelocity);
   }
@@ -204,16 +209,12 @@
     v = unscaleVelocity(velocity(ptC, ptDelta));
     newVolume += abs(min(0.0, v.x)) * max(0.0, v.y) * texture2D(waterSimulation, ptC).z;
     
-    // Add a small amount of volume to simulate condensation
-    // Need to turn time into seconds
-    // newVolume += snoise(pt + (time * 0.001)) * (deltaTime * 0.001) * condensationRate;
-    // Add condensation
+    // Add water to simulate condensation
     if (addWater) {
       vec2 noise = cellular(pt / ptDelta * 0.1 + time);
       // Scale the amount by height so the top gets more and the bottom less
       newVolume += (noise.y - noise.x) * pt.y;
     }
-    // newVolume += deltaTime * 0.1;
     
     return newVolume;
   }
@@ -252,15 +253,15 @@
     // Update the velocity and volume
     // TO DO: calculate velocity and volume on septate passes
     gl_FragColor = vec4(vec3(texture2D(waterSimulation, vUV).z), 1.0);
-    // if (texture2D(waterSimulation, vUV).x > 0.0) {
-    //   gl_FragColor = vec4(1.0, 1.0, 0.0, 1.0);
-    // }
-    // if (texture2D(waterSimulation, vUV).y == 0.0) {
-    //   gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
-    // }
-    // if (texture2D(waterSimulation, vUV).y == 1.0) {
-    //   gl_FragColor = vec4(1.0, 1.0, 0.0, 1.0);
-    // }
+    if (texture2D(waterSimulation, vUV).y == 0.0) {
+      gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+    }
+    if (texture2D(waterSimulation, vUV).y == 1.0) {
+      gl_FragColor = vec4(1.0, 1.0, 0.0, 1.0);
+    }
+    if (texture2D(waterSimulation, vUV).z == 0.0) {
+      gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
+    }
     // if (texture2D(waterSimulation, vUV).x != 0.5) {
     //   gl_FragColor = vec4(0.0, 1.0, 1.0, 1.0);
     // }
@@ -272,8 +273,8 @@
   var camera;
   var renderer;
 
-  var resX =200;
-  var resY =200;
+  var resX =128;
+  var resY =128;
 
   var bufferScene;
   var bufferMaterial;
@@ -318,7 +319,7 @@
 
     bufferMaterial = new THREE.RawShaderMaterial( {
       uniforms: {
-        time: { type: "f", value: performance.now() },
+        time: { type: "f", value: performance.now() * 0.001 },
         deltaTime: { type: "f", value: 0.0 },
         waterSimulation: { type: "t", value: dataTexture },
         condensationRate: { type: 'f', value: 0.01 },
@@ -395,8 +396,8 @@
       var stride = i * 4;
       
       // Randomly choose channels
-      data[ stride ] = 0;
-      data[ stride + 1 ] = 0;
+      data[ stride ] = 255.0/2.0;
+      data[ stride + 1 ] = 255.0/2.0;
       data[ stride + 2 ] = 0;
       data[ stride + 3 ] = 0;
     }
